@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import Column, String, Text, create_engine, Integer, text
+from sqlalchemy import Column, String, Text, create_engine, Integer, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -17,7 +17,7 @@ class AccountModel(Base):
     __tablename__ = "accounts"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    access_token = Column(String(2048), unique=True, nullable=False, index=True)
+    access_token = Column(Text, unique=True, nullable=False, index=True)
     data = Column(Text, nullable=False)  # JSON 格式存储完整账号数据
 
 
@@ -41,7 +41,24 @@ class DatabaseStorageBackend(StorageBackend):
             pool_recycle=3600,   # 1小时回收连接
         )
         Base.metadata.create_all(self.engine)
+        self._ensure_schema()
         self.Session = sessionmaker(bind=self.engine)
+
+    def _ensure_schema(self) -> None:
+        if self.engine.dialect.name not in {"postgresql", "postgres"}:
+            return
+
+        columns = inspect(self.engine).get_columns("accounts")
+        access_token_column = next((item for item in columns if item["name"] == "access_token"), None)
+        if access_token_column is None:
+            return
+
+        column_type = access_token_column["type"]
+        if getattr(column_type, "length", None) is None:
+            return
+
+        with self.engine.begin() as connection:
+            connection.execute(text("ALTER TABLE accounts ALTER COLUMN access_token TYPE TEXT"))
 
     def load_accounts(self) -> list[dict[str, Any]]:
         """从数据库加载账号数据"""
